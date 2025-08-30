@@ -1,16 +1,22 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-redis/redis/v8"
-	"github.com/lm-Alesh-Patil/docker-api-service/config"
-	"github.com/lm-Alesh-Patil/docker-api-service/routes"
+	"github.com/lm-Alesh-Patil/notification-api-service/config"
+	"github.com/lm-Alesh-Patil/notification-api-service/notification/repository"
+	"github.com/lm-Alesh-Patil/notification-api-service/notification/service"
+	"github.com/lm-Alesh-Patil/notification-api-service/processor"
+	"github.com/lm-Alesh-Patil/notification-api-service/routes"
+	"github.com/robfig/cron/v3"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -59,23 +65,57 @@ func (s *Server) SetupRedis() error {
 
 func (s *Server) Setup() error {
 	if err := s.SetupMysqlDatabase(); err != nil {
+		log.Println("MYSQL setup error", err)
 		return err
 	}
 	if err := s.SetupRedis(); err != nil {
+		log.Println("REDIS setup error", err)
 		return err
 	}
 	return nil
 }
 
+// StartCronJobs runs scheduled jobs
+func (s *Server) startCronJobs() {
+	c := cron.New()
+
+	// Example: run every minute
+	_, err := c.AddFunc("@every 1m", func() {
+		log.Println("Cron Job: Checking scheduled tasks...")
+	})
+	if err != nil {
+		log.Fatalf("failed to add cron job: %v", err)
+	}
+
+	c.Start()
+	log.Println("Cron scheduler started...")
+}
+
 func (s *Server) Start() error {
+	// Setup MySQL + Redis
+	if err := s.Setup(); err != nil {
+		return err
+	}
+
+	// --- Create dependencies ---
+	notifRepo := repository.NewNotificationRepository(s.DB, s.Redis, "notification_queue")
+	notifService := service.NewNotificationService(notifRepo)
+
+	// Start worker
+	worker := processor.NewNotificationWorker(notifRepo, notifService)
+	go worker.Start(context.Background())
+
+	// Start cron jobs
+	s.startCronJobs()
+
+	// Setup HTTP server
 	router := chi.NewRouter()
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.Timeout(30 * time.Second))
 
-	// Register all routes
-	routes.RegisterRoutes(router, *s.Config, s.DB, s.Redis)
-
+	// Register routes with NotificationService
+	routes.RegisterRoutes(router, s.DB, s.Redis, notifService)
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.Config.Connection.HTTP.Host, s.Config.Connection.HTTP.Port),
 		ReadTimeout:  time.Duration(s.Config.Connection.HTTP.ReadTimeout) * time.Second,
@@ -88,6 +128,5 @@ func (s *Server) Start() error {
 		s.Config.Connection.HTTP.Host,
 		s.Config.Connection.HTTP.Port,
 	)
-
 	return httpServer.ListenAndServe()
 }

@@ -14,7 +14,7 @@ RUN go mod download
 COPY . .
 
 # Build the Go binary
-RUN go build -o docker-api-service .
+RUN go build -o notification-api-service .
 
 # -----------------------
 # Final stage
@@ -29,7 +29,7 @@ RUN apk add --no-cache bash curl vim
 COPY --from=builder /app /app
 
 # Expose the port your Go app listens on
-EXPOSE 8005
+EXPOSE 8006
 
 # Start the Go server
-CMD ["./docker-api-service"]
+CMD ["./notification-api-service"]

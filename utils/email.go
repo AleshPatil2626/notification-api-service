@@ -11,6 +11,8 @@ type EmailConfig struct {
 	Username    string
 	Password    string
 	SenderEmail string
+	Sender      string
+	FromDomain  string
 }
 
 func SendEmail(cfg EmailConfig, to, subject, body string) error {
